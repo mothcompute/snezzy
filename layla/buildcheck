@@ -1,0 +1,1 @@
+cc main.c -o bin/laylatest && cc howmany.c -o bin/howmany && bin/howmany && bin/laylatest
