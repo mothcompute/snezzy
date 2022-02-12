@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define PACK_STRUCT __attribute__((packed))
+#define L_PACK_STRUCT __attribute__((packed))
 #define ll_swap(X, Y) X ^= Y ^= X ^= Y
 
 typedef struct {
@@ -15,7 +15,7 @@ typedef struct {
 	uint8_t M  : 1;
 	uint8_t V  : 1;
 	uint8_t N  : 1;
-} PACK_STRUCT ll_status_internal;
+} L_PACK_STRUCT ll_status_internal;
 
 typedef union {
 	uint8_t byte;

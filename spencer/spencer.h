@@ -14,18 +14,22 @@ typedef struct {
 	uint16_t PC;		// 2 byte registers
 	uint8_t* mem;		// 0x10000 bytes
 
+	// the void*s in the function declarations are spc_cpus
+	
 	/* MMR arguments:
 	 * 
 	 * width	description
 	 * -------------------------
 	 * u8	| register number (0-15)
 	 * u8	| data to write (if reading anything is fine)
-	 * u8	| S_R to read, S_W to write
+	 * u8	| S_R to read, S_W to write, or with S_I to prevent resetting data
 	 */
-	uint8_t(*mmr)(uint8_t, uint8_t, uint8_t);
+	uint8_t(*mmr)(void*, uint8_t, uint8_t, uint8_t);
+	void(*stop)(void*);
 	unsigned int wait;
 	unsigned int initialized;
-	uint8_t sleeping;
+	uint8_t stp;
+	uint8_t use;
 } spc_cpu;
 
 #define spc_getn(CPU) (CPU->P >> 7)

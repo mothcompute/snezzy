@@ -1,12 +1,16 @@
 #include <spencer.c>
 
-uint8_t mmr(uint8_t reg, uint8_t d, uint8_t rw) {
+uint8_t mmr(spc_cpu* s, uint8_t reg, uint8_t d, uint8_t rw) {
+	
+}
+
+void stop(spc_cpu* s) {
 
 }
 
 int main(int argc, char** argv) {
 	spc_cpu s;
-	spc_init(&s, malloc(0x10000), &mmr);
+	spc_init(&s, malloc(0x10000), &mmr, &stop);
 	// TODO copy in new spc data
 	while(1) {
 		printf(	"WAIT: %u\n"
