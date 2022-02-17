@@ -24,6 +24,7 @@ const uint8_t spc_ipl[0x40] = {
 
 uint8_t spc_r(spc_cpu* s, uint16_t p) {
 	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) return s->mmr(s, p - 0xF0, 0, S_R);
+	//if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) {uint8_t i = s->mmr(s, p - 0xF0, 0, S_R);printf("MMR %02X\n", i);return i;}
 	if(p >= 0xFFC0 && s->mmr(s, 0xF1, 0, S_R|S_I) >> 7) return spc_ipl[p - 0xFFC0];
 	return s->mem[p];
 }
@@ -34,12 +35,43 @@ uint8_t spc_intr(spc_cpu* s, uint16_t p) {
 }
 
 void spc_w(spc_cpu* s, uint16_t p, uint8_t d) {
-	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) {
-		s->mmr(s, p - 0xF0, d, S_W);
-		return;
-	}
-	s->mem[p] = d;
+	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) s->mmr(s, p - 0xF0, d, S_W);
+	else s->mem[p] = d;
 }
+
+#define spc_getn(CPU) (CPU->P >> 7)
+#define spc_getv(CPU) ((CPU->P >> 6) & 1)
+#define spc_getp(CPU) ((CPU->P >> 5) & 1)
+#define spc_getb(CPU) ((CPU->P >> 4) & 1)
+#define spc_geth(CPU) ((CPU->P >> 3) & 1)
+#define spc_geti(CPU) ((CPU->P >> 2) & 1)
+#define spc_getz(CPU) ((CPU->P >> 1) & 1)
+#define spc_getc(CPU) (CPU->P & 1)
+
+#define spc_setn(CPU) CPU->P |= 0x80
+#define spc_setv(CPU) CPU->P |= 0x40
+#define spc_setp(CPU) CPU->P |= 0x20
+#define spc_setb(CPU) CPU->P |= 0x10
+#define spc_seth(CPU) CPU->P |= 0x08
+#define spc_seti(CPU) CPU->P |= 0x04
+#define spc_setz(CPU) CPU->P |= 0x02
+#define spc_setc(CPU) CPU->P |= 0x01
+
+#define spc_unsetn(CPU) CPU->P &= ~0x80
+#define spc_unsetv(CPU) CPU->P &= ~0x40
+#define spc_unsetp(CPU) CPU->P &= ~0x20
+#define spc_unsetb(CPU) CPU->P &= ~0x10
+#define spc_unseth(CPU) CPU->P &= ~0x08
+#define spc_unseti(CPU) CPU->P &= ~0x04
+#define spc_unsetz(CPU) CPU->P &= ~0x02
+#define spc_unsetc(CPU) CPU->P &= ~0x01
+
+#define spc_sbn(c, d) c->P = (c->P & 0x7F) | (d & 0x80)
+#define spc_sbz(c, d) c->P = (c->P & 0xFD) | (!d << 1)
+
+#define spc_inc(c, d) d++; spc_sbn(c, d); spc_sbz(c, d)
+#define spc_dec(c, d) d--; spc_sbn(c, d); spc_sbz(c, d)
+#define spc_trans(c, a, b) a = b; spc_sbn(c, a); spc_sbz(c, a)
 
 // this is bad
 #define spc_im8(C, O) (spc_r(C, C->PC + 1 + O))
@@ -54,14 +86,28 @@ void spc_w(spc_cpu* s, uint16_t p, uint8_t d) {
 
 #define spc_push(C, O) spc_w(C, 0x100 + ((uint8_t)C->SP--), O)
 
+#define spc_push16(C, O) spc_push(C, O >> 8); spc_push(C, O);
+
 #define spc_pull(C) spc_r(C, C->SP++)
+
+uint16_t spc_pull16(spc_cpu* s) {
+	uint16_t c = spc_pull(s);
+	return c | ((uint16_t)spc_pull(s) << 8);
+}
 
 #define spc_setbf(C, S) C |= (1 << S)
 #define spc_unsetbf(C, S) C &= ~(1 << S)
-#define spc_issetbf(C, S) ((C >> S) & 1)
+#define spc_getbf(C, S) ((C >> S) & 1)
 
-#define SPC_VT -1
-int spc_cycles[256] = { // -1: length returned by spc_eval
+#define spc_branch(C, O) s->PC += (int8_t)spc_im8(C, O)
+
+uint16_t spc_r16(spc_cpu* s, uint16_t p) {
+	uint16_t d = spc_r(s, p++);
+	return (d << 8) | spc_r(s, p);
+}
+
+#define SPC_VT 0
+int8_t spc_cycles[256] = { // -1: length returned by spc_eval
 //	0	1	2	3	4	5	6	7	8	9	a	b	c	d	e	f
 	2,	8,	4,	SPC_VT,	3,	4,	3,	6,	2,	6,	5,	4,	5,	4,	6,	8,	// 0
 	SPC_VT,	8,	4,	SPC_VT,	4,	5,	5,	6,	5,	5,	6,	5,	2,	2,	4,	6,	// 1
@@ -101,18 +147,63 @@ uint8_t spc_len[256] = {
 	2,	1,	2,	3,	2,	3,	3,	2,	2,	2,	3,	2,	1,	1,	2,	1	// f
 };
 
-void spc_eval(spc_cpu* s, int* d) {
-	switch(spc_r(s, s->PC)) {
+void spc_eval(spc_cpu* s, int* d, uint8_t opcode) {
+	if((opcode & 0xF) == 1) { // tcall (0x*1)
+		spc_push16(s, s->PC);
+		// should be xFFDE, but spc_len adds 3 to
+		// PC anyway so i subtracted 3 from here.
+		// if you copy the code keep that in mind
+		s->PC = spc_r16(s, 0xFFDB - (opcode >> 3));
+	} else if((opcode & 0x0F) == 2) { // set1 (evens x*2), clr1(odds x*2)
+		uint8_t b = spc_r(s, spc_dp(s, spc_im8(s, 0)));
+		if(opcode & 0x10) spc_unsetbf(b, opcode >> 5);
+		else spc_setbf(b, opcode >> 5);
+		spc_w(s, spc_dp(s, spc_im8(s, 0)), b);
+	} else if(!(opcode & 0x0F) && (opcode & 0x10) && opcode <= 0x70) {
+		// bpl (x10), bmi (x30), bvc (x50), bvs (x70)
+		uint8_t conflags[4] = {!spc_getn(s), spc_getn(s), !spc_getv(s), spc_getv(s)};
+		if(conflags[opcode >> 5]) spc_branch(s, 0);
+	} else if((opcode & 0x0F) == 3) {
+		uint8_t set = spc_getbf(spc_r(s, spc_im8(s, 0)), opcode >> 5);
+		if((opcode & 0x10) && !set) goto br;
+		else if(!(opcode & 0x10) && set) goto br;
+		else goto nobr;
+
+br:	spc_branch(s, 1);
+	*d = 2;
+nobr:
+
+	} else if((opcode & 0x0F) == 0x0D && !(opcode & 0x10) && opcode <= 0x6D) {
+		uint8_t regs[4] = {s->P, s->A, s->X, s->Y};
+		spc_push(s, regs[opcode >> 5]);
+	} else if((opcode & 0x0F) == 0x0E && opcode >= 0x8E && !(opcode & 0x10)) {
+		uint8_t* regs[4] = {&s->P, &s->A, &s->X, &s->Y};
+		*regs[opcode >> 5] = spc_pull(s);
+	} else switch(opcode) {
 		case 0x00:
+			break;
+		case 0x1D:
+			spc_dec(s, s->X);
 			break;
 		case 0x20:
 			spc_unsetp(s);
 			break;
+		case 0x2F:
+			spc_branch(s, 0);
+			break;
 		case 0x3D:
 			spc_inc(s, s->X);
 			break;
+		case 0x3F:
+			spc_push16(s, s->PC);
+			s->PC = spc_im16(s) - 3; // subtract 3 for opcode length
+			break;
 		case 0x40:
 			spc_setp(s);
+			break;
+		case 0x4F:
+			spc_push16(s, s->PC);
+			s->PC = (0xFF00 | spc_im8(s, 0)) - 2; // subtract 2 for opcode length
 			break;
 		case 0x5D:
 			spc_trans(s, s->X, s->A);
@@ -120,8 +211,16 @@ void spc_eval(spc_cpu* s, int* d) {
 		case 0x60:
 			spc_unsetc(s);
 			break;
+		case 0x6F:
+			s->PC = spc_pull16(s) - 1;
+			break;
 		case 0x80:
 			spc_setc(s);
+			break;
+		case 0x9F:
+			s->A = (s->A >> 4) | (s-> A << 4);
+			spc_sbn(s, s->A);
+			spc_sbz(s, s->A);
 			break;
 		case 0xA0:
 			spc_seti(s);
@@ -131,6 +230,9 @@ void spc_eval(spc_cpu* s, int* d) {
 			break;
 		case 0xC0:
 			spc_unseti(s);
+			break;
+		case 0xD0:
+			if(!spc_getz(s)) spc_branch(s, 0);
 			break;
 		case 0xE0:
 			spc_unsetv(s);
@@ -142,70 +244,46 @@ void spc_eval(spc_cpu* s, int* d) {
 		case 0xEF:
 			s->stop(s);
 			break;
+		case 0xF0:
+			if(spc_getz(s)) spc_branch(s, 0);
+			break;
 		case 0xFC:
 			spc_inc(s, s->Y);
+			break;
+		case 0xFD:
+			spc_trans(s, s->Y, s->A);
 			break;
 		case 0xFF:
 			s->stop(s);
 			break;
 		default:
 			printf("unimplemented opcode: 0x%02X\n", spc_r(s, s->PC));
-			*d = 1;
+			*d = -1;
 			break;
 	}
 }
 
-int spc_cyc(spc_cpu* s) {
-	switch(spc_r(s, s->PC)) {
-		case 0x03:
-			break;
+uint8_t spc_cyc(spc_cpu* s, uint8_t o) {
+	switch(o) {
 		case 0x10:
-			break;
-		case 0x13:
-			break;
-		case 0x23:
 			break;
 		case 0x2E:
 			break;
 		case 0x30:
 			break;
-		case 0x33:
-			break;
-		case 0x43:
-			break;
 		case 0x50:
-			break;
-		case 0x53:
-			break;
-		case 0x63:
 			break;
 		case 0x6E:
 			break;
 		case 0x70:
 			break;
-		case 0x73:
-			break;
-		case 0x83:
-			break;
 		case 0x90:
-			break;
-		case 0x93:
-			break;
-		case 0xA3:
 			break;
 		case 0xB0:
 			break;
-		case 0xB3:
-			break;
-		case 0xC3:
-			break;
 		case 0xD0:
 			break;
-		case 0xD3:
-			break;
 		case 0xDE:
-			break;
-		case 0xE3:
 			break;
 		case 0xEF:
 			s->stp = 0xEF;
@@ -213,8 +291,6 @@ int spc_cyc(spc_cpu* s) {
 			return 0;
 			break;
 		case 0xF0:
-			break;
-		case 0xF3:
 			break;
 		case 0xFE:
 			break;
@@ -224,21 +300,30 @@ int spc_cyc(spc_cpu* s) {
 			return 0;
 			break;
 		default:
+			return spc_cycles[spc_r(s, s->PC)];
 			break;
 	}
-	return spc_cycles[spc_r(s, s->PC)] - 1;
+	return 0;
 }
 
 int spc_loop(spc_cpu* s) {
 	if(s->initialized != 0x59C700) return !printf("SPENCER UNINITIALIZED\n") - 1;
-	if(!s->use) s->use = !!(s->wait = spc_cyc(s));
-	if(s->stop) return 0;
-	int err = 0;
+	if(!s->use) s->use = !!(s->wait = spc_cyc(s, spc_intr(s, s->PC)));
+	if(s->stp) return 0;
+	int d = 0;
 	if(s->wait == 0) {
 		printf("-- EVAL --\n");
-		spc_eval(s, &err);
-		s->PC += spc_len[spc_r(s, s->PC)];
-		s->wait = spc_cyc(s);
+		if(!s->con) {
+			uint8_t opcode = spc_r(s, s->PC);
+			spc_eval(s, &d, opcode);
+			if(d < 0) return d;
+			if(d <= 2) {
+				s->wait += d;
+				s->con = 1;
+			}
+			s->PC += spc_len[opcode];
+			s->wait = spc_cyc(s, opcode);
+		} else s->con = 0;
 	} else s->wait--;
-	return err;
+	return d;
 }

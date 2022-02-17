@@ -30,39 +30,10 @@ typedef struct {
 	unsigned int initialized;
 	uint8_t stp;
 	uint8_t use;
+	uint8_t con;
 } spc_cpu;
 
-#define spc_getn(CPU) (CPU->P >> 7)
-#define spc_getv(CPU) ((CPU->P >> 6) & 1)
-#define spc_getp(CPU) ((CPU->P >> 5) & 1)
-#define spc_getb(CPU) ((CPU->P >> 4) & 1)
-#define spc_geth(CPU) ((CPU->P >> 3) & 1)
-#define spc_geti(CPU) ((CPU->P >> 2) & 1)
-#define spc_getz(CPU) ((CPU->P >> 1) & 1)
-#define spc_getc(CPU) (CPU->P & 1)
-
-#define spc_setn(CPU) CPU->P |= 0x80
-#define spc_setv(CPU) CPU->P |= 0x40
-#define spc_setp(CPU) CPU->P |= 0x20
-#define spc_setb(CPU) CPU->P |= 0x10
-#define spc_seth(CPU) CPU->P |= 0x08
-#define spc_seti(CPU) CPU->P |= 0x04
-#define spc_setz(CPU) CPU->P |= 0x02
-#define spc_setc(CPU) CPU->P |= 0x01
-
-#define spc_unsetn(CPU) CPU->P &= ~0x80
-#define spc_unsetv(CPU) CPU->P &= ~0x40
-#define spc_unsetp(CPU) CPU->P &= ~0x20
-#define spc_unsetb(CPU) CPU->P &= ~0x10
-#define spc_unseth(CPU) CPU->P &= ~0x08
-#define spc_unseti(CPU) CPU->P &= ~0x04
-#define spc_unsetz(CPU) CPU->P &= ~0x02
-#define spc_unsetc(CPU) CPU->P &= ~0x01
-
-#define spc_sbn(c, d) c->P = (c->P & 0x7F) | (d & 0x80)
-#define spc_sbz(c, d) c->P = (c->P & 0xFD) | (!d << 1)
-
-#define spc_inc(c, d) d++; spc_sbn(c, d); spc_sbz(c, d)
-#define spc_trans(c, a, b) a = b; spc_sbn(c, a); spc_sbz(c, a)
+int spc_loop(spc_cpu*);
+void spc_init(spc_cpu*, void*, uint8_t(*)(spc_cpu*, uint8_t, uint8_t, uint8_t), void(*)(spc_cpu*));
 
 #endif

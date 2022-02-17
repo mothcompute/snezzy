@@ -1,3 +1,7 @@
 SOURCES=main.c
 OUTPUT=spctest
-FLAGS=-I.
+FLAGS='-I. -O3'
+
+warn() {
+	FLAGS="$FLAGS -Wall -Wextra"
+}
