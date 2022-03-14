@@ -1,0 +1,4 @@
+NUMREM=$(($(grep OPCL -A256 ~/projects/snezzy/spencer/opcodes | wc -l)-1))
+PERCREM=$(echo "scale=4; $NUMREM/2.56" | bc)
+[ ! -z "$1" ] && grep -A256 OPCL ~/projects/snezzy/spencer/opcodes | grep -E "$1" | nvim
+echo $((256-$NUMREM)) done, $NUMREM remaining "($(echo scale=4\; 100-$PERCREM | bc)% done, $PERCREM% remaining)"

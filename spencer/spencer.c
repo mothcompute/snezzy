@@ -6,15 +6,6 @@
 // needs printf
 #include <stdio.h>
 
-void spc_init(spc_cpu* s, void* mem, uint8_t(*mmr)(spc_cpu*, uint8_t, uint8_t, uint8_t), void(*stop)(spc_cpu*)) {
-	if(!mmr || !stop) return; // just dont initialize. bad data in, bad data out
-	memset(s, 0, sizeof(spc_cpu));
-	s->mmr = (uint8_t(*)(void*, uint8_t, uint8_t, uint8_t))mmr;
-	s->mem = mem;
-	s->stop = (void(*)(void*))stop;
-	s->initialized = 0x59C700;
-}
-
 const uint8_t spc_ipl[0x40] = {
 	0xCD, 0xEF, 0xBD, 0xE8, 0x00, 0xC6, 0x1D, 0xD0, 0xFC, 0x8F, 0xAA, 0xF4, 0x8F, 0xBB, 0xF5, 0x78,
 	0xCC, 0xF4, 0xD0, 0xFB, 0x2F, 0x19, 0xEB, 0xF4, 0xD0, 0xFC, 0x7E, 0xF4, 0xD0, 0x0B, 0xE4, 0xF5,
@@ -22,16 +13,24 @@ const uint8_t spc_ipl[0x40] = {
 	0xF6, 0xDA, 0x00, 0xBA, 0xF4, 0xC4, 0xF4, 0xDD, 0x5D, 0xD0, 0xDB, 0x1F, 0x00, 0x00, 0xC0, 0xFF
 };
 
-uint8_t spc_r(spc_cpu* s, uint16_t p) {
-	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) return s->mmr(s, p - 0xF0, 0, S_R);
-	//if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) {uint8_t i = s->mmr(s, p - 0xF0, 0, S_R);printf("MMR %02X\n", i);return i;}
-	if(p >= 0xFFC0 && s->mmr(s, 0xF1, 0, S_R|S_I) >> 7) return spc_ipl[p - 0xFFC0];
-	return s->mem[p];
+void spc_init(spc_cpu* s, void* mem, uint8_t(*mmr)(spc_cpu*, uint8_t, uint8_t, uint8_t), void(*stop)(spc_cpu*)) {
+	if(!mmr || !stop) return; // just dont initialize. bad data in, bad data out
+	memset(s, 0, sizeof(spc_cpu));
+	s->mmr = (uint8_t(*)(void*, uint8_t, uint8_t, uint8_t))mmr;
+	s->mem = mem;
+	s->stop = (void(*)(void*))stop;
+	s->PC = 0xFFC0;
+	s->wait = *spc_ipl;
+	s->initialized = 0x59C700;
 }
 
-uint8_t spc_intr(spc_cpu* s, uint16_t p) {
-	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) return s->mmr(s, p - 0xF0, 0, S_R|S_I);
-	return spc_r(s, p);
+#define spc_r(s, p) spc_vr(s, p, 0)
+#define spc_ir(s, p) spc_vr(s, p, S_I)
+
+uint8_t spc_vr(spc_cpu* s, uint16_t p, uint8_t f) {
+	if((p >= 0xF0 && p <= 0xF7) || (p >= 0xFA && p <= 0xFF)) return s->mmr(s, p - 0xF0, 0, S_R | f);
+	if(p >= 0xFFC0 && s->mmr(s, 0xF1, 0, S_R | S_I) >> 7) return spc_ipl[p - 0xFFC0];
+	return s->mem[p];
 }
 
 void spc_w(spc_cpu* s, uint16_t p, uint8_t d) {
@@ -69,26 +68,24 @@ void spc_w(spc_cpu* s, uint16_t p, uint8_t d) {
 #define spc_sbn(c, d) c->P = (c->P & 0x7F) | (d & 0x80)
 #define spc_sbz(c, d) c->P = (c->P & 0xFD) | (!d << 1)
 
-#define spc_inc(c, d) d++; spc_sbn(c, d); spc_sbz(c, d)
-#define spc_dec(c, d) d--; spc_sbn(c, d); spc_sbz(c, d)
-#define spc_trans(c, a, b) a = b; spc_sbn(c, a); spc_sbz(c, a)
+#define spc_sbnz(c, d) spc_sbn(c, d); spc_sbz(c, d)
 
-// this is bad
+#define spc_inc(c, d) d++; spc_sbnz(c, d)
+#define spc_dec(c, d) d--; spc_sbnz(c, d)
+
 #define spc_im8(C, O) (spc_r(C, C->PC + 1 + O))
+#define spc_im16(C) spc_r16(s, C->PC+1)
+#define spc_dp(C, O) ((((uint16_t)spc_getp(C)) << 8) | (uint8_t)(O))
 
-// this is not okay
-#define spc_im16(C) ((((uint16_t)spc_im8(C, 1)) << 8) | spc_im8(C, 0))
-
-// with code like this all these opcodes are illegal opcodes
-#define spc_dp(C, O) ((((uint16_t)spc_getp(C)) << 8) | (uint8_t)O)
-
-#define spc_sp(C, O) (0x100 | (uint8_t)O)
+#define spc_sp(C, O) (0x100 | (uint8_t)(O))
 
 #define spc_push(C, O) spc_w(C, 0x100 + ((uint8_t)C->SP--), O)
 
-#define spc_push16(C, O) spc_push(C, O >> 8); spc_push(C, O);
+#define spc_push16(C, O) spc_push(C, O >> 8); spc_push(C, O)
 
 #define spc_pull(C) spc_r(C, C->SP++)
+
+#define spc_or(C, A, B) A |= B; spc_sbnz(C, A)
 
 uint16_t spc_pull16(spc_cpu* s) {
 	uint16_t c = spc_pull(s);
@@ -97,9 +94,21 @@ uint16_t spc_pull16(spc_cpu* s) {
 
 #define spc_setbf(C, S) C |= (1 << S)
 #define spc_unsetbf(C, S) C &= ~(1 << S)
-#define spc_getbf(C, S) ((C >> S) & 1)
 
 #define spc_branch(C, O) s->PC += (int8_t)spc_im8(C, O)
+
+typedef struct {
+	uint16_t adr;
+	uint8_t bit;
+} spc_mb;
+
+#define spc_splitmb(O) ((spc_mb){O & 0x1FFF, O >> 13})
+
+#define spc_getya(C) = ((uint16_t)C->A | (((uint16_t)C->Y) << 8))
+
+// cool guy macros
+#define spc_getbf(C, S) ((C >> S) & 1) 
+#define spc_trans(c, a, b) a = b; spc_sbnz(c, a)
 
 uint16_t spc_r16(spc_cpu* s, uint16_t p) {
 	uint16_t d = spc_r(s, p++);
@@ -148,6 +157,9 @@ uint8_t spc_len[256] = {
 };
 
 void spc_eval(spc_cpu* s, int* d, uint8_t opcode) {
+	uint8_t ri;
+	uint16_t adr;
+	spc_mb mb;
 	if((opcode & 0xF) == 1) { // tcall (0x*1)
 		spc_push16(s, s->PC);
 		// should be xFFDE, but spc_len adds 3 to
@@ -159,10 +171,26 @@ void spc_eval(spc_cpu* s, int* d, uint8_t opcode) {
 		if(opcode & 0x10) spc_unsetbf(b, opcode >> 5);
 		else spc_setbf(b, opcode >> 5);
 		spc_w(s, spc_dp(s, spc_im8(s, 0)), b);
-	} else if(!(opcode & 0x0F) && (opcode & 0x10) && opcode <= 0x70) {
-		// bpl (x10), bmi (x30), bvc (x50), bvs (x70)
-		uint8_t conflags[4] = {!spc_getn(s), spc_getn(s), !spc_getv(s), spc_getv(s)};
-		if(conflags[opcode >> 5]) spc_branch(s, 0);
+	} else if((opcode << 3) == 0x80) {
+		// - GUIDE -  reg !if opcode id
+		// bpl (x10), 00  0   10000
+		// bmi (x30), 00  1   10000
+		//
+		// bvc (x50), 01  0   10000
+		// bvs (x70), 01  1   10000
+		//
+		// bcc (x90), 10  0   10000
+		// bcs (xB0), 10  1   10000
+		//
+		// bne (xD0), 11  0   10000
+		// beq (xF0), 11  1   10000
+		uint8_t conflags[4] = {spc_getn(s), spc_getv(s), spc_getc(s), spc_getz(s)};
+		if(conflags[opcode >> 6] & spc_getbf(opcode, 5)) spc_branch(s, 0);
+	} else if((opcode & 0x1F) == 0xA && opcode <= 0x6A) {
+		mb = spc_splitmb(spc_im16(s));
+		ri = spc_getbf(spc_r(s, mb.adr), mb.bit) ^ spc_getbf(opcode, 6);
+		if(opcode & 0x40) s->P |= ri;
+		else s->P &= ri;
 	} else if((opcode & 0x0F) == 3) {
 		uint8_t set = spc_getbf(spc_r(s, spc_im8(s, 0)), opcode >> 5);
 		if((opcode & 0x10) && !set) goto br;
@@ -181,6 +209,19 @@ nobr:
 		*regs[opcode >> 5] = spc_pull(s);
 	} else switch(opcode) {
 		case 0x00:
+			break;
+		case 0x04:
+			spc_or(s, s->A, spc_r(s, spc_dp(s, spc_im8(s, 0))));
+			break;
+		case 0x05:
+			spc_or(s, s->A, spc_r(s, spc_im16(s)));
+			break;
+		case 0x0F:
+			spc_push16(s, s->PC);
+			spc_push(s, s->P);
+			s->PC = 0xFFDD;
+			s->P |= 0x10;
+			s->P &= 0xFB;
 			break;
 		case 0x1D:
 			spc_dec(s, s->X);
@@ -214,38 +255,102 @@ nobr:
 		case 0x6F:
 			s->PC = spc_pull16(s) - 1;
 			break;
+		case 0x7D:
+			spc_trans(s, s->A, s->X);
+			break;
+		case 0x7F:
+			s->P = spc_pull(s);
+			s->PC = spc_pull16(s) - 1;
+			break;
 		case 0x80:
 			spc_setc(s);
 			break;
+		case 0x8A:
+			adr = spc_im16(s);
+			spc_mb mb = spc_splitmb(adr);
+			s->P ^= spc_getbf(spc_r(s, mb.adr), mb.bit);
+			break;
+		case 0x8B:
+			adr = spc_dp(s, spc_im8(s, 0));
+			ri = spc_r(s, adr) - 1;
+			spc_w(s, adr, ri);
+			spc_sbnz(s, ri);
+			break;
+		case 0x8C:
+			adr = spc_im16(s);
+			ri = spc_r(s, adr) - 1;
+			spc_w(s, adr, ri);
+			spc_sbnz(s, ri);
+			break;
+		case 0x8D:
+			spc_trans(s, s->Y, spc_im8(s, 0));
+			break;
+		case 0x9B:
+			adr = spc_dp(s, spc_im8(s, 0) + s->X);
+			ri = spc_r(s, adr) - 1;
+			spc_w(s, adr, ri);
+			spc_sbnz(s, ri);
+			break;
+		case 0x9C:
+			spc_dec(s, s->A);
+			break;
+		case 0x9D:
+			spc_trans(s, s->X, s->SP);
+			break;
 		case 0x9F:
-			s->A = (s->A >> 4) | (s-> A << 4);
+			s->A = (s->A >> 4) | (s->A << 4);
 			spc_sbn(s, s->A);
 			spc_sbz(s, s->A);
 			break;
 		case 0xA0:
 			spc_seti(s);
 			break;
+		case 0xAA:
+			adr = spc_im16(s);
+			mb = spc_splitmb(adr);
+			s->P = (s->P & 0xFE) | (spc_getbf(spc_r(s, mb.adr), mb.bit));
+			break;
 		case 0xBC:
 			spc_inc(s, s->A);
+			break;
+		case 0xBD:
+			spc_trans(s, s->SP, s->X);
 			break;
 		case 0xC0:
 			spc_unseti(s);
 			break;
-		case 0xD0:
-			if(!spc_getz(s)) spc_branch(s, 0);
+		case 0xCA:
+			adr = spc_im16(s);
+			mb = spc_splitmb(adr);
+			spc_w(s, mb.adr, (spc_r(s, mb.adr) & ~(1 << mb.bit)) | (spc_getc(s) << mb.bit));
+			break;
+		case 0xCD:
+			spc_trans(s, s->X, spc_im8(s, 0));
+			break;
+		case 0xDC:
+			spc_dec(s, s->Y);
+			break;
+		case 0xDD:
+			spc_trans(s, s->A, s->Y);
 			break;
 		case 0xE0:
 			spc_unsetv(s);
 			spc_unseth(s);
 			break;
+		case 0xE8:
+			spc_trans(s, s->A, spc_im8(s, 0));
+			break;
+		case 0xEA:
+			adr = spc_im16(s);
+			mb = spc_splitmb(adr);
+			spc_w(s, mb.adr, spc_r(s, mb.adr) ^ (1 << mb.bit));
+			break;
 		case 0xED:
 			s->P ^= 1;
 			break;
 		case 0xEF:
+			s->stp = 0xEF;
 			s->stop(s);
-			break;
-		case 0xF0:
-			if(spc_getz(s)) spc_branch(s, 0);
 			break;
 		case 0xFC:
 			spc_inc(s, s->Y);
@@ -255,6 +360,7 @@ nobr:
 			break;
 		case 0xFF:
 			s->stop(s);
+			s->stp = 0xFF;
 			break;
 		default:
 			printf("unimplemented opcode: 0x%02X\n", spc_r(s, s->PC));
@@ -263,52 +369,15 @@ nobr:
 	}
 }
 
-uint8_t spc_cyc(spc_cpu* s, uint8_t o) {
-	switch(o) {
-		case 0x10:
-			break;
-		case 0x2E:
-			break;
-		case 0x30:
-			break;
-		case 0x50:
-			break;
-		case 0x6E:
-			break;
-		case 0x70:
-			break;
-		case 0x90:
-			break;
-		case 0xB0:
-			break;
-		case 0xD0:
-			break;
-		case 0xDE:
-			break;
-		case 0xEF:
-			s->stp = 0xEF;
-			s->stop(s);
-			return 0;
-			break;
-		case 0xF0:
-			break;
-		case 0xFE:
-			break;
-		case 0xFF:
-			s->stp = 0xFF;
-			s->stop(s);
-			return 0;
-			break;
-		default:
-			return spc_cycles[spc_r(s, s->PC)];
-			break;
-	}
-	return 0;
-}
+/* opcodes that need the Variable Timingness (they are branches)
+	0x2E
+	0x6E
+	0xDE
+	0xFE
+*/
 
 int spc_loop(spc_cpu* s) {
 	if(s->initialized != 0x59C700) return !printf("SPENCER UNINITIALIZED\n") - 1;
-	if(!s->use) s->use = !!(s->wait = spc_cyc(s, spc_intr(s, s->PC)));
 	if(s->stp) return 0;
 	int d = 0;
 	if(s->wait == 0) {
@@ -322,7 +391,7 @@ int spc_loop(spc_cpu* s) {
 				s->con = 1;
 			}
 			s->PC += spc_len[opcode];
-			s->wait = spc_cyc(s, opcode);
+			s->wait = spc_cycles[opcode];
 		} else s->con = 0;
 	} else s->wait--;
 	return d;

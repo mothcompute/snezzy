@@ -29,7 +29,6 @@ typedef struct {
 	unsigned int wait;
 	unsigned int initialized;
 	uint8_t stp;
-	uint8_t use;
 	uint8_t con;
 } spc_cpu;
 
